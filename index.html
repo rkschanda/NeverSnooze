@@ -238,7 +238,7 @@
   <div class="workout-actions">
     <button class="btn btn-ghost" id="garmin-btn" onclick="connectGarmin()">📡 Connect Garmin (BLE)</button>
     <button class="btn btn-ghost" id="sim-btn" onclick="toggleHRSim()">Simulate HR feed</button>
-    <button class="btn btn-danger" onclick="confirmEndWorkout()">Done working out</button>
+
   </div>
 </div>
 
@@ -695,13 +695,7 @@ function workoutComplete() {
   setTimeout(() => { showScreen('home'); updateHomeUI(); }, 1500);
 }
 
-function confirmEndWorkout() {
-  if (confirm('End workout early? The alarm will not refire.')) {
-    clearInterval(workoutTick); workoutActive = false; refiring = false;
-    stopHRSim(); sendM5Command('stop');
-    showScreen('home'); updateHomeUI();
-  }
-}
+
 
 // ── GARMIN BLE ──
 async function connectGarmin() {
@@ -735,7 +729,7 @@ function toggleHRSim() {
   document.getElementById('sim-btn').textContent = '■ Stop HR simulation';
 }
 
-function stopHRSim() {
+
   if (hrSimInterval) { clearInterval(hrSimInterval); hrSimInterval = null; }
   document.getElementById('sim-btn').textContent = 'Simulate HR feed';
 }
