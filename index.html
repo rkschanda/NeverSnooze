@@ -730,6 +730,7 @@ function toggleHRSim() {
 }
 
 
+function stopHRSim() {
   if (hrSimInterval) { clearInterval(hrSimInterval); hrSimInterval = null; }
   document.getElementById('sim-btn').textContent = 'Simulate HR feed';
 }
