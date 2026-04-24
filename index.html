@@ -174,7 +174,7 @@
         <span class="m5-pill-dot" id="m5-pill-dot"></span>
         <span id="m5-pill-text">M5 · no IP set</span>
       </div>
-      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.1em;">v1.2.0</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.1em;">v1.3.0</div>
     </div>
   </div>
   <div class="home-middle">
@@ -421,18 +421,22 @@ function saveState() {
 async function pushStateToM5() {
   if (!state.m5ip) return;
   try {
+    // Convert days array [0,1,2..6] to bitmask integer for firmware
+    const daysBitmask = state.days.reduce((mask, d) => mask | (1 << d), 0);
+    // Ensure alarmTime always has leading zeros e.g. "06:30"
+    const [h, m] = state.alarmTime.split(':');
+    const paddedTime = String(parseInt(h)).padStart(2,'0') + ':' + String(parseInt(m)).padStart(2,'0');
     await fetch(`http://${state.m5ip}/config`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        alarmTime:   state.alarmTime,
-        days:        state.days,
+        alarmTime:   paddedTime,
+        days:        daysBitmask,
         enabled:     state.enabled,
         mode:        state.mode,
         workoutMins: state.workoutMins,
         hrThreshold: state.hrThreshold,
         hrPreset:    state.hrPreset
-        // tagId intentionally excluded — phone only
       }),
       signal: AbortSignal.timeout(3000)
     });
