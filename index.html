@@ -145,7 +145,10 @@
   .nfc-register-text { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.5; }
   .nfc-register-text strong { color: var(--accent); display: block; font-size: 12px; margin-bottom: 2px; }
   .tag-id-display { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 8px; word-break: break-all; }
-  .m5-status { display: flex; align-items: center; gap: 8px; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 12px; }
+  .m5-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 20px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.08em; }
+  .m5-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .m5-pill-dot.online { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .m5-pill-dot.offline { background: var(--accent2); }
   .m5-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
   .test-trigger { margin-top: 10px; width: 100%; padding: 12px; background: rgba(255,71,71,0.08); border: 1px solid rgba(255,71,71,0.3); border-radius: 6px; color: var(--accent2); font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; cursor: pointer; transition: all 0.15s; }
 
@@ -165,6 +168,13 @@
     <div class="alarm-status">
       <span class="status-dot" id="status-dot"></span>
       <span id="status-text">No alarm set</span>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:8px; align-items:center;">
+      <div class="m5-pill" id="m5-pill">
+        <span class="m5-pill-dot" id="m5-pill-dot"></span>
+        <span id="m5-pill-text">M5 · no IP set</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.1em;">v1.0.3</div>
     </div>
   </div>
   <div class="home-middle">
@@ -462,7 +472,7 @@ function showScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(`screen-${name}`).classList.add('active');
   if (name === 'config') loadConfigUI();
-  if (name === 'home')   updateHomeUI();
+  if (name === 'home')   { updateHomeUI(); pingM5(); }
 }
 
 // ── HOME ──
@@ -857,9 +867,31 @@ function showToast(msg, type='') {
   setTimeout(() => t.classList.remove('show'), 2500);
 }
 
+// ── M5 PING ──
+async function pingM5() {
+  const dot = document.getElementById('m5-pill-dot');
+  const txt = document.getElementById('m5-pill-text');
+  if (!state.m5ip) {
+    dot.className = 'm5-pill-dot';
+    txt.textContent = 'M5 · no IP set';
+    return;
+  }
+  try {
+    const res = await fetch(`http://${state.m5ip}/ping`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      dot.className = 'm5-pill-dot online';
+      txt.textContent = 'M5 · online';
+    } else throw new Error();
+  } catch(e) {
+    dot.className = 'm5-pill-dot offline';
+    txt.textContent = 'M5 · offline';
+  }
+}
+
 // ── INIT ──
-updateClock(); updateHomeUI();
+updateClock(); updateHomeUI(); pingM5();
 setInterval(updateClock, 10000);
+setInterval(pingM5, 30000);
 </script>
 </body>
 </html>
