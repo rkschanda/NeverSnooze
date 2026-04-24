@@ -174,7 +174,7 @@
         <span class="m5-pill-dot" id="m5-pill-dot"></span>
         <span id="m5-pill-text">M5 · no IP set</span>
       </div>
-      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.1em;">v1.0.3</div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.1em;">v1.2.0</div>
     </div>
   </div>
   <div class="home-middle">
@@ -389,6 +389,7 @@
         <input type="text" id="m5-ip-input" placeholder="192.168.1.x">
       </div>
       <button class="btn btn-ghost" onclick="testM5Connection()" style="font-size:12px;padding:10px">Test connection</button>
+      <button class="btn btn-ghost" onclick="pullStateFromM5()" style="font-size:12px;padding:10px;margin-top:6px">↓ Sync config from M5</button>
       <div class="m5-status" id="m5-status">
         <span class="m5-dot"></span>
         Not connected · hardware pending
@@ -412,7 +413,46 @@ state.mode        = state.mode        || 'standard';
 state.workoutMins = state.workoutMins || 45;
 state.hrThreshold = state.hrThreshold || 140;
 state.hrPreset    = state.hrPreset    || 'Hard Cardio ★';
-function saveState() { localStorage.setItem('wake-state', JSON.stringify(state)); }
+function saveState() {
+  localStorage.setItem('wake-state', JSON.stringify(state));
+  pushStateToM5();
+}
+
+async function pushStateToM5() {
+  if (!state.m5ip) return;
+  try {
+    await fetch(`http://${state.m5ip}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alarmTime:   state.alarmTime,
+        days:        state.days,
+        enabled:     state.enabled,
+        mode:        state.mode,
+        workoutMins: state.workoutMins,
+        hrThreshold: state.hrThreshold,
+        hrPreset:    state.hrPreset
+        // tagId intentionally excluded — phone only
+      }),
+      signal: AbortSignal.timeout(3000)
+    });
+  } catch(e) {}
+}
+
+async function pullStateFromM5() {
+  if (!state.m5ip) return;
+  try {
+    const res = await fetch(`http://${state.m5ip}/config`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return;
+    const remote = await res.json();
+    // Merge remote into state, preserving phone-only fields
+    const tagId = state.tagId;
+    state = { ...state, ...remote, tagId };
+    localStorage.setItem('wake-state', JSON.stringify(state));
+    updateHomeUI();
+    showToast('Config synced from M5 ✓', 'success');
+  } catch(e) {}
+}
 
 // ── WORKOUT RUNTIME ──
 let alarmFiring   = false;
@@ -437,14 +477,6 @@ function updateClock() {
   document.getElementById('clock').textContent =
     String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
   updateCountdown(now);
-  checkAlarmFire(now);
-}
-
-function checkAlarmFire(now) {
-  if (!state.enabled || alarmFiring) return;
-  const [ah, am] = state.alarmTime.split(':').map(Number);
-  if (now.getHours() === ah && now.getMinutes() === am && now.getSeconds() < 30 && state.days.includes(now.getDay()))
-    triggerAlarm();
 }
 
 function msUntilAlarm(now) {
@@ -889,7 +921,7 @@ async function pingM5() {
 }
 
 // ── INIT ──
-updateClock(); updateHomeUI(); pingM5();
+updateClock(); updateHomeUI(); pingM5(); pullStateFromM5();
 setInterval(updateClock, 10000);
 setInterval(pingM5, 30000);
 </script>
