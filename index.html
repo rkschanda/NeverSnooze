@@ -1,354 +1,990 @@
-#include <M5Unified.h>
-#include <WiFi.h>
-#include <WebServer.h>
-#include <ArduinoJson.h>
-#include <SD.h>
-#include <time.h>
+<!-- APP_VERSION: 1.10.0 -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>WAKE</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0a; --surface: #141414; --border: #2a2a2a;
+    --accent: #e8ff47; --accent2: #ff4747; --accent3: #47c4ff;
+    --text: #f0f0f0; --muted: #666;
+    --mono: 'Space Mono', monospace; --sans: 'Syne', sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; overflow-x: hidden; }
+  .screen { display: none; min-height: 100dvh; flex-direction: column; }
+  .screen.active { display: flex; }
 
-const char* WIFI_SSID     = "Schanda Fritz";
-const char* WIFI_PASSWORD = "35Stephanie";
-const char* NTP_SERVER    = "pool.ntp.org";
-const long  GMT_OFFSET    = 3600;
-const int   DST_OFFSET    = 3600;
+  /* HOME */
+  #screen-home { padding: 28px 24px 20px; justify-content: space-between; position: relative; overflow: hidden; height: 100dvh; min-height: unset; }
+  #screen-home::before { content: ''; position: absolute; top: -120px; right: -80px; width: 320px; height: 320px; background: radial-gradient(circle, rgba(232,255,71,0.08) 0%, transparent 70%); pointer-events: none; }
+  .home-top { position: relative; z-index: 1; flex-shrink: 0; }
+  .label-tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.15em; color: var(--muted); text-transform: uppercase; margin-bottom: 6px; }
+  .big-time { font-family: var(--mono); font-size: clamp(48px, 14vw, 72px); font-weight: 700; line-height: 1; letter-spacing: -0.03em; }
+  .alarm-status { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px; padding: 6px 12px; border: 1px solid var(--border); border-radius: 4px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; color: var(--muted); }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .status-dot.armed { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .status-dot.firing { background: var(--accent2); box-shadow: 0 0 12px var(--accent2); animation: pulse-dot 0.6s ease-in-out infinite alternate; }
+  @keyframes pulse-dot { from { box-shadow: 0 0 6px var(--accent2); } to { box-shadow: 0 0 20px var(--accent2); } }
+  .home-middle { position: relative; z-index: 1; flex-shrink: 0; }
+  .next-alarm-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .next-alarm-time { font-family: var(--mono); font-size: 28px; font-weight: 700; color: var(--accent); letter-spacing: -0.02em; line-height: 1; }
+  .next-alarm-meta { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 6px; line-height: 1.8; }
+  .next-alarm-meta span { color: var(--accent3); }
+  .countdown { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .home-actions { display: flex; flex-direction: column; gap: 10px; position: relative; z-index: 1; flex-shrink: 0; }
 
-// ── ALARM CONFIG ──
-bool  alarmEnabled  = false;
-int   alarmHour     = 6;
-int   alarmMinute   = 30;
-int   alarmDays     = 0b0111110;
-bool  workoutMode   = false;
-int   workoutMins   = 45;
-int   hrThreshold   = 140;
+  /* BUTTONS */
+  .btn { width: 100%; padding: 16px; border: none; border-radius: 6px; font-family: var(--sans); font-size: 15px; font-weight: 700; letter-spacing: 0.05em; cursor: pointer; transition: opacity 0.15s, transform 0.1s; }
+  .btn:active { transform: scale(0.98); opacity: 0.85; }
+  .btn-primary { background: var(--accent); color: #0a0a0a; }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-outline { background: transparent; color: var(--accent); border: 2px solid var(--accent); }
+  .btn-danger { background: var(--accent2); color: #fff; border: none; }
 
-// ── SNOOZE ──
-bool  snoozeActive    = false;
-unsigned long snoozeEnd = 0;
+  /* ALARM FIRING */
+  #screen-alarm { background: #0a0a0a; align-items: center; justify-content: center; text-align: center; padding: 40px 24px; position: relative; overflow: hidden; }
+  .alarm-bg-pulse { position: absolute; inset: 0; background: radial-gradient(ellipse at center, rgba(255,71,71,0.12) 0%, transparent 70%); animation: alarm-breathe 1s ease-in-out infinite alternate; pointer-events: none; }
+  @keyframes alarm-breathe { from { opacity: 0.4; transform: scale(0.95); } to { opacity: 1; transform: scale(1.05); } }
+  .alarm-content { position: relative; z-index: 1; width: 100%; max-width: 360px; }
+  .alarm-icon { font-size: 64px; margin-bottom: 24px; animation: shake 0.5s ease-in-out infinite; display: block; }
+  @keyframes shake { 0%, 100% { transform: rotate(-8deg); } 50% { transform: rotate(8deg); } }
+  .alarm-title { font-size: 48px; font-weight: 800; letter-spacing: -0.02em; color: var(--accent2); line-height: 1; margin-bottom: 8px; }
+  .alarm-subtitle { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: 0.1em; margin-bottom: 32px; }
+  .nfc-area { border: 2px dashed var(--border); border-radius: 12px; padding: 28px 24px; margin-bottom: 16px; transition: border-color 0.3s, background 0.3s; }
+  .nfc-area.scanning { border-color: var(--accent); background: rgba(232,255,71,0.04); animation: nfc-pulse 1.5s ease-in-out infinite; }
+  @keyframes nfc-pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(232,255,71,0.2); } 50% { box-shadow: 0 0 0 12px rgba(232,255,71,0); } }
+  .nfc-area.success { border-color: var(--accent); border-style: solid; background: rgba(232,255,71,0.08); }
+  .nfc-icon { font-size: 36px; margin-bottom: 10px; display: block; }
+  .nfc-instruction { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: 0.08em; line-height: 1.6; }
+  .nfc-instruction strong { color: var(--text); display: block; font-size: 14px; margin-bottom: 4px; }
+  .dev-note { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.08em; margin-top: 10px; }
 
+  /* WORKOUT */
+  #screen-workout { background: #0a0a0a; padding: 40px 24px 32px; position: relative; overflow: hidden; flex-direction: column; gap: 16px; }
+  #screen-workout::before { content: ''; position: absolute; top: -100px; left: -100px; width: 400px; height: 400px; background: radial-gradient(circle, rgba(71,196,255,0.06) 0%, transparent 70%); pointer-events: none; }
+  .workout-header { position: relative; z-index: 1; }
+  .workout-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.15em; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; }
+  .workout-title { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+  .workout-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; position: relative; z-index: 1; }
+  .workout-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  .workout-card.full { grid-column: 1 / -1; }
+  .wc-label { font-family: var(--mono); font-size: 9px; letter-spacing: 0.15em; color: var(--muted); text-transform: uppercase; margin-bottom: 5px; }
+  .wc-value { font-family: var(--mono); font-size: 30px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+  .wc-value.green { color: var(--accent); }
+  .wc-value.red { color: var(--accent2); }
+  .wc-value.blue { color: var(--accent3); }
+  .wc-sub { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .hr-bar-wrap { margin-top: 8px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .hr-bar { height: 100%; background: var(--accent3); border-radius: 2px; transition: width 1s ease, background 0.5s; }
+  .hr-bar.danger { background: var(--accent2); }
+  .check-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .check-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+  .check-dot.pass { background: var(--accent); }
+  .check-dot.fail { background: var(--accent2); }
+  .check-dot.pending { background: var(--muted); animation: pulse-dot 1s infinite alternate; }
+  .next-check-bar { height: 3px; background: var(--border); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  .next-check-fill { height: 100%; background: var(--accent3); border-radius: 2px; transition: width 1s linear; }
+  .refire-banner { background: rgba(255,71,71,0.12); border: 1px solid rgba(255,71,71,0.4); border-radius: 8px; padding: 14px; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--accent2); letter-spacing: 0.05em; display: none; animation: alarm-breathe 0.8s ease-in-out infinite alternate; position: relative; z-index: 1; }
+  .refire-banner.show { display: block; }
+  .workout-actions { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 10px; margin-top: auto; }
+
+  /* CONFIG */
+  #screen-config { padding: 48px 24px 40px; justify-content: flex-start; gap: 20px; overflow-y: auto; }
+  .config-header { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
+  .back-btn { background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-size: 18px; width: 36px; height: 36px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .config-title { font-size: 22px; font-weight: 800; letter-spacing: -0.02em; }
+  .config-sections { display: flex; flex-direction: column; gap: 14px; }
+  .config-section { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 18px; }
+  .config-section-title { font-family: var(--mono); font-size: 10px; letter-spacing: 0.15em; color: var(--muted); text-transform: uppercase; margin-bottom: 14px; }
+  .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+  .field label { font-size: 12px; color: var(--muted); font-family: var(--mono); letter-spacing: 0.05em; }
+  .field input { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--text); font-family: var(--mono); font-size: 16px; padding: 12px; width: 100%; outline: none; transition: border-color 0.15s; }
+  .field input:focus { border-color: var(--accent); }
+  .day-picker { display: flex; gap: 6px; flex-wrap: wrap; }
+  .day-btn { flex: 1; min-width: 36px; padding: 10px 4px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: 0.05em; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .day-btn.selected { background: rgba(232,255,71,0.1); border-color: var(--accent); color: var(--accent); }
+
+  /* Mode toggle */
+  .mode-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .mode-btn { padding: 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--muted); font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .mode-btn .mode-icon { font-size: 22px; display: block; margin-bottom: 6px; }
+  .mode-btn .mode-name { font-weight: 700; color: var(--text); display: block; margin-bottom: 2px; font-size: 13px; font-family: var(--sans); }
+  .mode-btn .mode-desc { font-size: 10px; color: var(--muted); display: block; }
+  .mode-btn.selected { border-color: var(--accent); background: rgba(232,255,71,0.06); }
+  .mode-btn.selected .mode-name { color: var(--accent); }
+
+  /* Workout config (hidden in standard mode) */
+  .workout-config { display: none; }
+  .workout-config.show { display: flex; flex-direction: column; gap: 14px; }
+
+  /* Duration picker */
+  .duration-picker { display: flex; gap: 8px; flex-wrap: wrap; }
+  .dur-btn { flex: 1; min-width: 52px; padding: 10px 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; color: var(--muted); font-family: var(--mono); font-size: 11px; cursor: pointer; text-align: center; transition: all 0.15s; }
+  .dur-btn.selected { background: rgba(232,255,71,0.1); border-color: var(--accent); color: var(--accent); }
+
+  /* HR presets */
+  .hr-presets { display: flex; flex-direction: column; gap: 8px; }
+  .hr-preset { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.15s; }
+  .hr-preset.selected { border-color: var(--accent); background: rgba(232,255,71,0.06); }
+  .hr-preset-info { display: flex; flex-direction: column; gap: 2px; }
+  .hr-preset-name { font-size: 13px; font-weight: 700; }
+  .hr-preset-desc { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .hr-preset-bpm { font-family: var(--mono); font-size: 18px; font-weight: 700; color: var(--accent); }
+  .custom-hr-wrap { margin-top: 10px; display: none; }
+  .custom-hr-wrap.show { display: block; }
+
+  /* NFC */
+  .nfc-register-area { border: 1px dashed var(--border); border-radius: 6px; padding: 20px; text-align: center; cursor: pointer; transition: all 0.2s; }
+  .nfc-register-area:hover { border-color: var(--accent); background: rgba(232,255,71,0.03); }
+  .nfc-register-area.registered { border-color: var(--accent); border-style: solid; }
+  .nfc-register-icon { font-size: 28px; margin-bottom: 8px; display: block; }
+  .nfc-register-text { font-family: var(--mono); font-size: 11px; color: var(--muted); line-height: 1.5; }
+  .nfc-register-text strong { color: var(--accent); display: block; font-size: 12px; margin-bottom: 2px; }
+  .tag-id-display { font-family: var(--mono); font-size: 10px; color: var(--muted); margin-top: 8px; word-break: break-all; }
+  .m5-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 20px; font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.08em; }
+  .m5-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .m5-pill-dot.online { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+  .m5-pill-dot.offline { background: var(--accent2); }
+  .m5-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+  .test-trigger { margin-top: 10px; width: 100%; padding: 12px; background: rgba(255,71,71,0.08); border: 1px solid rgba(255,71,71,0.3); border-radius: 6px; color: var(--accent2); font-family: var(--mono); font-size: 11px; letter-spacing: 0.08em; cursor: pointer; transition: all 0.15s; }
+
+  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(80px); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 12px 20px; font-family: var(--mono); font-size: 12px; color: var(--text); letter-spacing: 0.05em; transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); z-index: 999; white-space: nowrap; }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.success { border-color: var(--accent); color: var(--accent); }
+  .toast.error { border-color: var(--accent2); color: var(--accent2); }
+</style>
+</head>
+<body>
+
+<!-- HOME -->
+<div id="screen-home" class="screen active">
+  <div class="home-top">
+    <div class="label-tag">Current time</div>
+    <div class="big-time" id="clock">00:00</div>
+    <div class="alarm-status">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">No alarm set</span>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:8px; align-items:center;">
+      <div class="m5-pill" id="m5-pill">
+        <span class="m5-pill-dot" id="m5-pill-dot"></span>
+        <span id="m5-pill-text">M5 · no IP set</span>
+      </div>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:0.1em;">v1.10.0</div>
+    </div>
+  </div>
+  <div class="home-middle">
+    <div class="next-alarm-card" id="next-alarm-card" style="display:none">
+      <div class="label-tag">Next alarm</div>
+      <div class="next-alarm-time" id="next-alarm-time">--:--</div>
+      <div class="next-alarm-meta" id="next-alarm-meta">—</div>
+      <div class="countdown" id="countdown-text">—</div>
+    </div>
+  </div>
+  <div class="home-actions">
+    <button class="btn btn-primary" onclick="showScreen('config')">Configure alarm</button>
+  </div>
+</div>
+
+<!-- ALARM FIRING -->
+<div id="screen-alarm" class="screen">
+  <div class="alarm-bg-pulse"></div>
+  <div class="alarm-content">
+    <span class="alarm-icon">⏰</span>
+    <div class="alarm-title">WAKE UP</div>
+    <div class="alarm-subtitle" id="alarm-firing-time">06:30 · MONDAY</div>
+    <div class="nfc-area" id="nfc-area">
+      <span class="nfc-icon">📡</span>
+      <div class="nfc-instruction">
+        <strong>Go downstairs first</strong>
+        Then tap the button below to activate NFC
+      </div>
+    </div>
+    <button class="btn btn-primary" onclick="activateNFCScan()" id="nfc-scan-btn" style="margin-bottom:10px;font-size:16px;padding:16px 32px;">📡 Activate NFC Scanner</button>
+    <button class="btn btn-outline" onclick="simulateNFC()" style="margin-bottom:10px;font-size:12px;">Simulate NFC tap</button>
+  </div>
+</div>
+
+<!-- WORKOUT MONITOR -->
+<div id="screen-workout" class="screen">
+  <div class="workout-header">
+    <div class="workout-label">Workout active</div>
+    <div class="workout-title" id="workout-title">Hard Cardio · 45 min</div>
+  </div>
+
+  <div class="refire-banner" id="refire-banner">
+    ⚠ HR below threshold — M5 is firing.<br>Get moving. It stops when you're back above <span id="refire-threshold">140</span>bpm.
+  </div>
+
+  <div class="workout-grid">
+    <div class="workout-card full">
+      <div class="wc-label">Time remaining</div>
+      <div class="wc-value green" id="wc-countdown">45:00</div>
+      <div class="wc-sub">committed duration</div>
+    </div>
+    <div class="workout-card">
+      <div class="wc-label">Heart rate</div>
+      <div class="wc-value blue" id="wc-hr">--</div>
+      <div class="wc-sub">bpm · target <span id="wc-target">140</span>+</div>
+      <div class="hr-bar-wrap"><div class="hr-bar" id="hr-bar" style="width:0%"></div></div>
+    </div>
+    <div class="workout-card">
+      <div class="wc-label">Next HR check</div>
+      <div class="wc-value blue" id="wc-next-check" style="color:var(--accent3)">10:00</div>
+      <div class="wc-sub">keep above threshold</div>
+      <div class="next-check-bar"><div class="next-check-fill" id="next-check-fill" style="width:100%"></div></div>
+    </div>
+    <div class="workout-card full">
+      <div class="wc-label">Check history</div>
+      <div class="check-row" id="check-row"></div>
+      <div class="wc-sub" style="margin-top:6px" id="check-status">First check in 10 min</div>
+    </div>
+  </div>
+
+  <div class="workout-actions">
+    <button class="btn btn-ghost" id="garmin-btn" onclick="connectGarmin()">📡 Connect Garmin (BLE)</button>
+    <button class="btn btn-ghost" id="sim-btn" onclick="toggleHRSim()">Simulate HR feed</button>
+
+  </div>
+</div>
+
+<!-- CONFIG -->
+<div id="screen-config" class="screen">
+  <div class="config-header">
+    <button class="back-btn" onclick="showScreen('home')">←</button>
+    <div class="config-title">Alarm Setup</div>
+  </div>
+  <div class="config-sections">
+
+    <!-- Time & Days -->
+    <div class="config-section">
+      <div class="config-section-title">Alarm time</div>
+      <div class="field">
+        <label>Time</label>
+        <input type="time" id="alarm-time-input" value="06:30">
+      </div>
+      <div class="field">
+        <label>Repeat days</label>
+        <div class="day-picker">
+          <button class="day-btn selected" data-day="1">MON</button>
+          <button class="day-btn selected" data-day="2">TUE</button>
+          <button class="day-btn selected" data-day="3">WED</button>
+          <button class="day-btn selected" data-day="4">THU</button>
+          <button class="day-btn selected" data-day="5">FRI</button>
+          <button class="day-btn" data-day="6">SAT</button>
+          <button class="day-btn" data-day="0">SUN</button>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveAlarm()">Save alarm</button>
+      <button class="test-trigger" onclick="triggerAlarmNow()">▶ Test alarm now</button>
+    </div>
+
+    <!-- Mode -->
+    <div class="config-section">
+      <div class="config-section-title">Mode</div>
+      <div class="mode-toggle">
+        <div class="mode-btn selected" id="mode-standard" onclick="selectMode('standard')">
+          <span class="mode-icon">🔔</span>
+          <span class="mode-name">Standard</span>
+          <span class="mode-desc">NFC tap to dismiss</span>
+        </div>
+        <div class="mode-btn" id="mode-workout" onclick="selectMode('workout')">
+          <span class="mode-icon">💪</span>
+          <span class="mode-name">Workout</span>
+          <span class="mode-desc">HR monitored · wife wakes up</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workout commitment (shown only in workout mode) -->
+    <div class="workout-config" id="workout-config">
+      <div class="config-section">
+        <div class="config-section-title">Tonight's commitment</div>
+        <div class="field">
+          <label>Workout duration</label>
+          <div class="duration-picker">
+            <button class="dur-btn" data-mins="20">20 min</button>
+            <button class="dur-btn" data-mins="30">30 min</button>
+            <button class="dur-btn selected" data-mins="45">45 min</button>
+            <button class="dur-btn" data-mins="60">60 min</button>
+            <button class="dur-btn" data-mins="90">90 min</button>
+          </div>
+        </div>
+        <div class="field">
+          <label>HR threshold</label>
+          <div class="hr-presets" id="hr-presets">
+            <div class="hr-preset" data-bpm="85" onclick="selectPreset(this)">
+              <div class="hr-preset-info">
+                <div class="hr-preset-name">Recovery</div>
+                <div class="hr-preset-desc">Walking, light yoga. No excuses.</div>
+              </div>
+              <div class="hr-preset-bpm">85</div>
+            </div>
+            <div class="hr-preset" data-bpm="100" onclick="selectPreset(this)">
+              <div class="hr-preset-info">
+                <div class="hr-preset-name">Strength</div>
+                <div class="hr-preset-desc">Lifting. Keep rest periods honest.</div>
+              </div>
+              <div class="hr-preset-bpm">100</div>
+            </div>
+            <div class="hr-preset" data-bpm="120" onclick="selectPreset(this)">
+              <div class="hr-preset-info">
+                <div class="hr-preset-name">Moderate Cardio</div>
+                <div class="hr-preset-desc">Cycling, rowing. Working but breathing.</div>
+              </div>
+              <div class="hr-preset-bpm">120</div>
+            </div>
+            <div class="hr-preset selected" data-bpm="140" onclick="selectPreset(this)">
+              <div class="hr-preset-info">
+                <div class="hr-preset-name">Hard Cardio ★</div>
+                <div class="hr-preset-desc">Running, HIIT. Talking is difficult.</div>
+              </div>
+              <div class="hr-preset-bpm">140</div>
+            </div>
+            <div class="hr-preset" data-bpm="155" onclick="selectPreset(this)">
+              <div class="hr-preset-info">
+                <div class="hr-preset-name">Beast Mode</div>
+                <div class="hr-preset-desc">Intervals, sprints. You asked for this.</div>
+              </div>
+              <div class="hr-preset-bpm">155</div>
+            </div>
+            <div class="hr-preset" data-bpm="custom" onclick="selectPreset(this)">
+              <div class="hr-preset-info">
+                <div class="hr-preset-name">Custom</div>
+                <div class="hr-preset-desc">Set your own threshold.</div>
+              </div>
+              <div class="hr-preset-bpm" id="custom-preview">—</div>
+            </div>
+          </div>
+          <div class="custom-hr-wrap" id="custom-hr-wrap">
+            <input type="number" id="custom-hr-input" placeholder="Enter BPM (60–200)" min="60" max="200" oninput="updateCustomPreview()">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NFC -->
+    <div class="config-section">
+      <div class="config-section-title">NFC tag</div>
+      <div class="nfc-register-area" id="nfc-register-area" onclick="registerNFC()">
+        <span class="nfc-register-icon">🏷️</span>
+        <div class="nfc-register-text">
+          <strong id="nfc-register-label">Tap to register tag</strong>
+          Hold phone over NFC sticker downstairs to register
+        </div>
+        <div class="tag-id-display" id="tag-id-display"></div>
+      </div>
+      <button class="btn btn-ghost" onclick="clearNFC()" style="margin-top:10px;font-size:12px;padding:10px">Clear registered tag</button>
+    </div>
+
+    <!-- M5 -->
+    <div class="config-section">
+      <div class="config-section-title">M5Stack · Stubbed</div>
+      <div class="field">
+        <label>M5 IP address</label>
+        <input type="text" id="m5-ip-input" placeholder="192.168.1.x">
+      </div>
+      <button class="btn btn-ghost" onclick="testM5Connection()" style="font-size:12px;padding:10px">Test connection</button>
+      <button class="btn btn-ghost" onclick="pullStateFromM5()" style="font-size:12px;padding:10px;margin-top:6px">↓ Sync config from M5</button>
+      <div class="m5-status" id="m5-status">
+        <span class="m5-dot"></span>
+        Not connected · hardware pending
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
 // ── STATE ──
-bool  alarmFiring      = false;
-bool  screenOn         = true;
-unsigned long lastTouch = 0;
-const unsigned long SCREEN_TIMEOUT = 10000;
-const int SNOOZE_X = 80, SNOOZE_Y = 200, SNOOZE_W = 160, SNOOZE_H = 35;
+let state = JSON.parse(localStorage.getItem('wake-state') || '{}');
+state.alarmTime   = state.alarmTime   || '06:30';
+state.days        = state.days        !== undefined ? state.days : [1,2,3,4,5];
+state.enabled     = state.enabled     !== undefined ? state.enabled : false;
+state.tagId       = state.tagId       || null;
+state.m5ip = state.m5ip || '192.168.178.91';
+state.mode        = state.mode        || 'standard';
+state.workoutMins = state.workoutMins || 45;
+state.hrThreshold = state.hrThreshold || 140;
+state.hrPreset    = state.hrPreset    || 'Hard Cardio ★';
+function saveState() {
+  localStorage.setItem('wake-state', JSON.stringify(state));
+  pushStateToM5();
+}
 
-WebServer server(80);
+async function pushStateToM5() {
+  if (!state.m5ip) return;
+  try {
+    // Convert days array [0,1,2..6] to bitmask integer for firmware
+    const daysBitmask = state.days.reduce((mask, d) => mask | (1 << d), 0);
+    // Ensure alarmTime always has leading zeros e.g. "06:30"
+    const [h, m] = state.alarmTime.split(':');
+    const paddedTime = String(parseInt(h)).padStart(2,'0') + ':' + String(parseInt(m)).padStart(2,'0');
+    await fetch(`http://${state.m5ip}/config`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        alarmTime:   paddedTime,
+        days:        daysBitmask,
+        enabled:     state.enabled,
+        mode:        state.mode,
+        workoutMins: state.workoutMins,
+        hrThreshold: state.hrThreshold,
+        hrPreset:    state.hrPreset
+      }),
+      signal: AbortSignal.timeout(3000)
+    });
+  } catch(e) {}
+}
 
-// ── WIFI ──
-void connectWiFi() {
-  M5.Lcd.fillScreen(TFT_BLACK);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setCursor(10, 10);
-  M5.Lcd.print("Connecting WiFi...");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500); attempts++;
-  }
-  if (WiFi.status() == WL_CONNECTED) {
-    configTime(GMT_OFFSET, DST_OFFSET, NTP_SERVER);
-    struct tm timeinfo;
-    int timeout = 0;
-    while (!getLocalTime(&timeinfo) && timeout < 10) {
-      delay(500); timeout++;
+async function pullStateFromM5() {
+  if (!state.m5ip) return;
+  try {
+    const res = await fetch(`http://${state.m5ip}/config`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return;
+    const remote = await res.json();
+    // Convert days bitmask integer back to array for app
+    if (typeof remote.days === 'number') {
+      remote.days = [0,1,2,3,4,5,6].filter(d => remote.days & (1 << d));
     }
-  }
-}
-
-// ── DISPLAY ──
-void wakeScreen() {
-  if (!screenOn) {
-    M5.Lcd.wakeup();
-    M5.Lcd.setBrightness(128);
-    screenOn = true;
-  }
-  lastTouch = millis();
-}
-
-void sleepScreen() {
-  M5.Lcd.sleep();
-  M5.Lcd.setBrightness(0);
-  screenOn = false;
-}
-
-void drawIdleScreen() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) return;
-  M5.Lcd.fillScreen(TFT_BLACK);
-  char timeStr[6];
-  sprintf(timeStr, "%02d:%02d", timeinfo.tm_hour, timeinfo.tm_min);
-  M5.Lcd.setTextSize(4);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setCursor(30, 60);
-  M5.Lcd.print(timeStr);
-  M5.Lcd.setTextSize(2);
-  if (alarmEnabled) {
-    char alarmStr[20];
-    sprintf(alarmStr, "ARMED  %02d:%02d", alarmHour, alarmMinute);
-    M5.Lcd.setTextColor(TFT_GREEN, TFT_BLACK);
-    M5.Lcd.setCursor(20, 160);
-    M5.Lcd.print(alarmStr);
-    if (workoutMode) {
-      M5.Lcd.setTextSize(1);
-      M5.Lcd.setTextColor(TFT_CYAN, TFT_BLACK);
-      char workoutStr[30];
-      sprintf(workoutStr, "Workout: %dmin @ %dbpm+", workoutMins, hrThreshold);
-      M5.Lcd.setCursor(10, 185);
-      M5.Lcd.print(workoutStr);
+    // Convert alarmTime from "06:30" to app format
+    if (remote.alarmTime) {
+      remote.alarmTime = remote.alarmTime; // already padded correctly
     }
+    // Merge remote into state, preserving phone-only fields
+    const tagId = state.tagId;
+    state = { ...state, ...remote, tagId };
+    localStorage.setItem('wake-state', JSON.stringify(state));
+    updateHomeUI();
+    showToast('Config synced from M5 ✓', 'success');
+  } catch(e) {}
+}
+
+// ── WORKOUT RUNTIME ──
+let alarmFiring   = false;
+let workoutActive = false;
+let refiring      = false;
+let checkHistory  = [];
+let nfcController = null;
+let hrSimInterval = null;
+let bleDevice     = null;
+let currentHR     = 0;
+let workoutTick   = null;
+
+// Timestamp-based timers — survive screen off
+let workoutEndTime  = null; // ms epoch when workout ends
+let nextCheckTime   = null; // ms epoch when next HR check fires
+let refiringStart   = null; // ms epoch when refire began (timer pauses)
+let pausedRemaining = null; // ms remaining when refire started
+
+// ── CLOCK ──
+function updateClock() {
+  const now = new Date();
+  document.getElementById('clock').textContent =
+    String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+  updateCountdown(now);
+}
+
+function msUntilAlarm(now) {
+  if (!state.days.length) return null;
+  const [ah, am] = state.alarmTime.split(':').map(Number);
+  let best = Infinity;
+  for (let d = 0; d < 7; d++) {
+    const c = new Date(now); c.setDate(c.getDate() + d); c.setHours(ah, am, 0, 0);
+    if (state.days.includes(c.getDay()) && c > now) { const diff = c - now; if (diff < best) best = diff; }
+  }
+  return best === Infinity ? null : best;
+}
+
+function updateCountdown(now) {
+  if (!state.enabled) return;
+  const ms = msUntilAlarm(now);
+  const card = document.getElementById('next-alarm-card');
+  if (!ms) { card.style.display = 'none'; return; }
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  document.getElementById('countdown-text').textContent = h > 0 ? `in ${h}h ${m}m` : `in ${m} min`;
+}
+
+// ── SCREENS ──
+function showScreen(name) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(`screen-${name}`).classList.add('active');
+  if (name === 'config') loadConfigUI();
+  if (name === 'home')   { updateHomeUI(); pingM5(); }
+}
+
+// ── HOME ──
+function updateHomeUI() {
+  const dot = document.getElementById('status-dot');
+  const txt = document.getElementById('status-text');
+  const card = document.getElementById('next-alarm-card');
+  if (alarmFiring) { dot.className = 'status-dot firing'; txt.textContent = 'Alarm firing'; return; }
+  if (state.enabled && state.days.length) {
+    dot.className = 'status-dot armed';
+    const [h, m] = state.alarmTime.split(':');
+    const hr = parseInt(h), ampm = hr >= 12 ? 'PM' : 'AM', hr12 = hr % 12 || 12;
+    const timeStr = `${hr12}:${m} ${ampm}`;
+    txt.textContent = `Armed · ${timeStr}`;
+    document.getElementById('next-alarm-time').textContent = timeStr;
+    const dayNames = ['SUN','MON','TUE','WED','THU','FRI','SAT'];
+    const modeStr = state.mode === 'workout'
+      ? `Workout · <span>${state.workoutMins} min · ${state.hrThreshold}bpm+</span>`
+      : `Standard · <span>NFC to dismiss</span>`;
+    document.getElementById('next-alarm-meta').innerHTML =
+      state.days.map(d => dayNames[d]).join(' · ') + '<br>' + modeStr;
+    card.style.display = 'block';
+    updateCountdown(new Date());
   } else {
-    M5.Lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-    M5.Lcd.setCursor(20, 160);
-    M5.Lcd.print("NO ALARM SET");
-  }
-  M5.Lcd.setTextSize(1);
-  M5.Lcd.setTextColor(TFT_DARKGREY, TFT_BLACK);
-  M5.Lcd.setCursor(10, 225);
-  M5.Lcd.print(WiFi.localIP().toString());
-}
-
-void drawAlarmScreen() {
-  M5.Lcd.fillScreen(0xF800);
-  M5.Lcd.setTextColor(TFT_WHITE, 0xF800);
-  M5.Lcd.setTextSize(4);
-  M5.Lcd.setCursor(30, 70);
-  M5.Lcd.print("WAKE UP");
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(30, 150);
-  M5.Lcd.print("Go downstairs");
-  M5.Lcd.setCursor(30, 175);
-  M5.Lcd.print("Tap NFC tag");
-  M5.Lcd.fillRoundRect(SNOOZE_X, SNOOZE_Y, SNOOZE_W, SNOOZE_H, 6, TFT_DARKGREY);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_DARKGREY);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setCursor(95, 208);
-  M5.Lcd.print("SNOOZE 2m");
-}
-
-void drawSnoozedScreen() {
-  M5.Lcd.fillScreen(TFT_BLACK);
-  M5.Lcd.setTextColor(TFT_ORANGE, TFT_BLACK);
-  M5.Lcd.setTextSize(3);
-  M5.Lcd.setCursor(20, 80);
-  M5.Lcd.print("SNOOZED");
-  int secsLeft = max(0, (int)((snoozeEnd - millis()) / 1000));
-  int m = secsLeft / 60, s = secsLeft % 60;
-  char buf[10];
-  sprintf(buf, "%d:%02d", m, s);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setCursor(20, 140);
-  M5.Lcd.print("Resuming in ");
-  M5.Lcd.print(buf);
-}
-
-// ── ALARM CHECK ──
-void checkAlarm() {
-  if (!alarmEnabled || alarmFiring || snoozeActive) return;
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) return;
-  int dayBit = 1 << timeinfo.tm_wday;
-  if (!(alarmDays & dayBit)) return;
-  if (timeinfo.tm_hour == alarmHour &&
-      timeinfo.tm_min  == alarmMinute &&
-      timeinfo.tm_sec  < 30) {
-    alarmFiring = true;
-    wakeScreen();
-    drawAlarmScreen();
+    dot.className = 'status-dot'; txt.textContent = 'No alarm set'; card.style.display = 'none';
   }
 }
 
-// ── SNOOZE ──
-void activateSnooze() {
-  if (snoozeActive) return;
-  snoozeActive = true;
-  alarmFiring  = false;
-  snoozeEnd    = millis() + 2 * 60 * 1000;
-  drawSnoozedScreen();
+// ── ALARM ──
+function triggerAlarm() {
+  alarmFiring = true;
+  const now = new Date();
+  const dayNames = ['SUNDAY','MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY'];
+  const [h, m] = state.alarmTime.split(':');
+  const hr = parseInt(h), ampm = hr >= 12 ? 'PM' : 'AM', hr12 = hr % 12 || 12;
+  document.getElementById('alarm-firing-time').textContent = `${hr12}:${m} ${ampm} · ${dayNames[now.getDay()]}`;
+  document.getElementById('nfc-area').className = 'nfc-area';
+  document.getElementById('nfc-area').innerHTML = `
+    <span class="nfc-icon">📡</span>
+    <div class="nfc-instruction">
+      <strong>Go downstairs</strong>
+      Tap your phone to the NFC tag to dismiss
+    </div>`;
+  showScreen('alarm');
+  startNFCScan();
+  sendM5Command('play');
 }
 
-void checkSnooze() {
-  if (!snoozeActive) return;
-  if (millis() >= snoozeEnd) {
-    snoozeActive = false;
-    alarmFiring  = true;
-    wakeScreen();
-    drawAlarmScreen();
-  } else {
-    static unsigned long lastSnoozeUpdate = 0;
-    if (millis() - lastSnoozeUpdate > 1000) {
-      lastSnoozeUpdate = millis();
-      drawSnoozedScreen();
-    }
-  }
-}
+function triggerAlarmNow() { triggerAlarm(); }
 
-// ── SERVE HTML FROM SD ──
-void handleRoot() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  File file = SD.open("/index.html", FILE_READ);
-  if (!file) {
-    server.send(404, "text/plain", "index.html not found on SD card");
+// ── NFC ──
+async function activateNFCScan() {
+  const btn = document.getElementById('nfc-scan-btn');
+  if (btn) { btn.textContent = '📡 Scanning... hold to tag'; btn.disabled = true; }
+  document.getElementById('nfc-area').classList.add('scanning');
+  if (!('NDEFReader' in window)) {
+    showToast('NFC not supported on this browser/device', 'error');
+    if (btn) { btn.textContent = '📡 Activate NFC Scanner'; btn.disabled = false; }
     return;
   }
-  server.streamFile(file, "text/html");
-  file.close();
-}
-
-// ── WEB SERVER HANDLERS ──
-void handlePing() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.send(200, "application/json", "{\"status\":\"ok\"}");
-}
-
-void handlePlay() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  alarmFiring  = true;
-  snoozeActive = false;
-  wakeScreen();
-  drawAlarmScreen();
-  server.send(200, "application/json", "{\"status\":\"playing\"}");
-}
-
-void handleStop() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  alarmFiring  = false;
-  snoozeActive = false;
-  wakeScreen();
-  drawIdleScreen();
-  server.send(200, "application/json", "{\"status\":\"stopped\"}");
-}
-
-void handleGetConfig() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  StaticJsonDocument<256> doc;
-  doc["alarmTime"]   = String(alarmHour < 10 ? "0" : "") + String(alarmHour) + ":" + String(alarmMinute < 10 ? "0" : "") + String(alarmMinute);
-  doc["days"]        = alarmDays;
-  doc["enabled"]     = alarmEnabled;
-  doc["mode"]        = workoutMode ? "workout" : "standard";
-  doc["workoutMins"] = workoutMins;
-  doc["hrThreshold"] = hrThreshold;
-  String response;
-  serializeJson(doc, response);
-  server.send(200, "application/json", response);
-}
-
-void handlePostConfig() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  if (!server.hasArg("plain")) { server.send(400, "application/json", "{\"error\":\"no body\"}"); return; }
-  StaticJsonDocument<256> doc;
-  if (deserializeJson(doc, server.arg("plain"))) { server.send(400, "application/json", "{\"error\":\"invalid json\"}"); return; }
-  if (doc.containsKey("alarmTime")) {
-    String t = doc["alarmTime"].as<String>();
-    alarmHour   = t.substring(0, 2).toInt();
-    alarmMinute = t.substring(3, 5).toInt();
+  try {
+    nfcController = new AbortController();
+    const reader = new NDEFReader();
+    await reader.scan({ signal: nfcController.signal });
+    reader.onreading = (e) => {
+      const id = e.serialNumber || 'unknown';
+      if (!state.tagId || id === state.tagId) handleNFCSuccess();
+      else showToast('Wrong tag', 'error');
+    };
+    reader.onerror = () => {
+      showToast('NFC error — try again', 'error');
+      if (btn) { btn.textContent = '📡 Activate NFC Scanner'; btn.disabled = false; }
+    };
+  } catch(e) {
+    showToast('NFC scan failed: ' + e.message, 'error');
+    if (btn) { btn.textContent = '📡 Activate NFC Scanner'; btn.disabled = false; }
   }
-  if (doc.containsKey("days"))        alarmDays    = doc["days"].as<int>();
-  if (doc.containsKey("enabled"))     alarmEnabled = doc["enabled"].as<bool>();
-  if (doc.containsKey("workoutMins")) workoutMins  = doc["workoutMins"].as<int>();
-  if (doc.containsKey("hrThreshold")) hrThreshold  = doc["hrThreshold"].as<int>();
-  if (doc.containsKey("mode"))        workoutMode  = String(doc["mode"].as<String>()) == "workout";
-  drawIdleScreen();
-  server.send(200, "application/json", "{\"status\":\"ok\"}");
 }
 
-void handleOptions() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
-  server.send(204);
+async function startNFCScan() {
+  // Legacy — do nothing, NFC now requires user gesture via activateNFCScan
 }
 
-void handleDebug() {
-  server.sendHeader("Access-Control-Allow-Origin", "*");
-  struct tm timeinfo;
-  getLocalTime(&timeinfo);
-  int dayBit = 1 << timeinfo.tm_wday;
-  StaticJsonDocument<256> doc;
-  doc["currentHour"]  = timeinfo.tm_hour;
-  doc["currentMin"]   = timeinfo.tm_min;
-  doc["currentSec"]   = timeinfo.tm_sec;
-  doc["currentWday"]  = timeinfo.tm_wday;
-  doc["dayBit"]       = dayBit;
-  doc["alarmDays"]    = alarmDays;
-  doc["alarmHour"]    = alarmHour;
-  doc["alarmMinute"]  = alarmMinute;
-  doc["alarmEnabled"] = alarmEnabled;
-  doc["match"]        = (alarmDays & dayBit) != 0;
-  String response;
-  serializeJson(doc, response);
-  server.send(200, "application/json", response);
+function stopNFCScan() {
+  if (nfcController) { nfcController.abort(); nfcController = null; }
 }
 
-void setupWebServer() {
-  server.on("/",       HTTP_GET,     handleRoot);
-  server.on("/ping",   HTTP_GET,     handlePing);
-  server.on("/play",   HTTP_GET,     handlePlay);
-  server.on("/stop",   HTTP_GET,     handleStop);
-  server.on("/debug",  HTTP_GET,     handleDebug);
-  server.on("/config", HTTP_GET,     handleGetConfig);
-  server.on("/config", HTTP_POST,    handlePostConfig);
-  server.on("/config", HTTP_OPTIONS, handleOptions);
-  server.begin();
-}
+function simulateNFC() { handleNFCSuccess(); }
 
-// ── SETUP ──
-void setup() {
-  M5.begin();
-  M5.Lcd.fillScreen(TFT_BLACK);
-  M5.Lcd.setTextSize(2);
-  M5.Lcd.setTextColor(TFT_WHITE, TFT_BLACK);
-  M5.Lcd.setCursor(10, 10);
-  if (!SD.begin(4)) {
-    M5.Lcd.setTextColor(TFT_RED, TFT_BLACK);
-    M5.Lcd.print("SD card failed!");
-    delay(3000);
+function handleNFCSuccess() {
+  const area = document.getElementById('nfc-area');
+  area.classList.remove('scanning');
+  area.classList.add('success');
+  area.innerHTML = `<span class="nfc-icon">✅</span><div class="nfc-instruction"><strong>Tag verified</strong>${state.mode === 'workout' ? 'Starting workout monitor...' : 'Dismissing alarm...'}</div>`;
+  stopNFCScan();
+  if (state.mode === 'standard') {
+    sendM5Command('stop', state.tagId ? `?tagId=${state.tagId}` : '');
+    alarmFiring = false;
+    setTimeout(() => { showScreen('home'); updateHomeUI(); }, 1000);
   } else {
-    M5.Lcd.setTextColor(TFT_GREEN, TFT_BLACK);
-    M5.Lcd.print("SD card OK");
-    delay(500);
+    setTimeout(() => startWorkout(), 1200);
   }
-  connectWiFi();
-  setupWebServer();
-  lastTouch = millis();
-  drawIdleScreen();
 }
 
-// ── LOOP ──
-void loop() {
-  M5.update();
-  server.handleClient();
-  checkAlarm();
-  checkSnooze();
+// ── WORKOUT ──
+function startWorkout() {
+  workoutActive  = true;
+  alarmFiring    = false;
+  refiring       = false;
+  checkHistory   = [];
+  currentHR      = 0;
+  refiringStart  = null;
+  pausedRemaining = null;
 
-  auto touch = M5.Touch.getDetail();
-  if (touch.wasPressed()) {
-    if (!screenOn) {
-      wakeScreen();
-      if (alarmFiring) drawAlarmScreen();
-      else if (snoozeActive) drawSnoozedScreen();
-      else drawIdleScreen();
-    } else {
-      lastTouch = millis();
-      if (alarmFiring &&
-          touch.x >= SNOOZE_X && touch.x <= SNOOZE_X + SNOOZE_W &&
-          touch.y >= SNOOZE_Y && touch.y <= SNOOZE_Y + SNOOZE_H) {
-        activateSnooze();
+  const now = Date.now();
+  workoutEndTime = now + state.workoutMins * 60 * 1000;
+  nextCheckTime  = now + 10 * 60 * 1000;
+
+  document.getElementById('workout-title').textContent =
+    `${state.hrPreset.replace(' ★','')} · ${state.workoutMins} min`;
+  document.getElementById('wc-target').textContent = state.hrThreshold;
+  document.getElementById('refire-threshold').textContent = state.hrThreshold;
+  document.getElementById('refire-banner').classList.remove('show');
+  document.getElementById('garmin-btn').textContent = '📡 Connect Garmin (BLE)';
+  document.getElementById('sim-btn').textContent = 'Simulate HR feed';
+
+  sendM5Command('stop');
+  renderCheckHistory();
+  updateWorkoutDisplay();
+  showScreen('workout');
+
+  workoutTick = setInterval(workoutLoop, 1000);
+}
+
+function workoutLoop() {
+  if (!workoutActive) return;
+  const now = Date.now();
+
+  // While refiring: check if HR recovered
+  if (refiring) {
+    if (currentHR >= state.hrThreshold) {
+      // Recovered — resume timers from where they paused
+      refiring = false;
+      sendM5Command('stop');
+      document.getElementById('refire-banner').classList.remove('show');
+      // Restart workout timer and check timer from remaining time
+      workoutEndTime = now + pausedRemaining;
+      nextCheckTime  = now + 10 * 60 * 1000;
+      pausedRemaining = null;
+      showToast('HR recovered ✓ — next check in 10 min', 'success');
+    }
+    updateWorkoutDisplay();
+    return;
+  }
+
+  // Normal flow — check if HR check is due
+  if (now >= nextCheckTime) {
+    runHRCheck(now);
+    return;
+  }
+
+  // Check if workout is complete
+  if (now >= workoutEndTime) {
+    workoutComplete();
+    return;
+  }
+
+  updateWorkoutDisplay();
+}
+
+function updateWorkoutDisplay() {
+  const now = Date.now();
+
+  // Workout countdown
+  const workoutMsLeft = refiring
+    ? pausedRemaining
+    : Math.max(0, workoutEndTime - now);
+  const wTotalSecs = Math.ceil(workoutMsLeft / 1000);
+  const wm = Math.floor(wTotalSecs / 60), ws = wTotalSecs % 60;
+  document.getElementById('wc-countdown').textContent =
+    String(wm).padStart(2,'0') + ':' + String(ws).padStart(2,'0');
+
+  // Next check countdown
+  const checkMsLeft = Math.max(0, nextCheckTime - now);
+  const cTotalSecs = Math.ceil(checkMsLeft / 1000);
+  const cm = Math.floor(cTotalSecs / 60), cs = cTotalSecs % 60;
+  document.getElementById('wc-next-check').textContent =
+    String(cm).padStart(2,'0') + ':' + String(cs).padStart(2,'0');
+  document.getElementById('next-check-fill').style.width =
+    (Math.min(1, checkMsLeft / (10 * 60 * 1000)) * 100) + '%';
+
+  // HR display
+  const hrEl = document.getElementById('wc-hr');
+  if (currentHR > 0) {
+    hrEl.textContent = currentHR;
+    hrEl.className = 'wc-value ' + (currentHR >= state.hrThreshold ? 'blue' : 'red');
+    const bar = document.getElementById('hr-bar');
+    bar.style.width = Math.min(100, (currentHR / 200) * 100) + '%';
+    bar.className = 'hr-bar' + (currentHR < state.hrThreshold ? ' danger' : '');
+  } else {
+    hrEl.textContent = '--';
+    hrEl.className = 'wc-value blue';
+  }
+}
+
+function runHRCheck(now) {
+  const passed = currentHR >= state.hrThreshold;
+  checkHistory.push(passed);
+  renderCheckHistory();
+
+  if (!passed) {
+    refiring = true;
+    pausedRemaining = Math.max(0, workoutEndTime - now); // freeze workout timer
+    document.getElementById('refire-banner').classList.add('show');
+    sendM5Command('play');
+    showToast('HR check failed — M5 firing!', 'error');
+  } else {
+    nextCheckTime = now + 10 * 60 * 1000;
+    showToast('HR check passed ✓', 'success');
+  }
+}
+
+function renderCheckHistory() {
+  const row = document.getElementById('check-row');
+  const status = document.getElementById('check-status');
+  const totalChecks = Math.floor(state.workoutMins / 10);
+  row.innerHTML = '';
+  for (let i = 0; i < totalChecks; i++) {
+    const dot = document.createElement('div');
+    if (i < checkHistory.length) dot.className = 'check-dot ' + (checkHistory[i] ? 'pass' : 'fail');
+    else if (i === checkHistory.length) dot.className = 'check-dot pending';
+    else dot.className = 'check-dot';
+    row.appendChild(dot);
+  }
+  const done = checkHistory.length, passed = checkHistory.filter(Boolean).length;
+  const minsToCheck = Math.ceil(Math.max(0, nextCheckTime - Date.now()) / 60000);
+  status.textContent = done === 0
+    ? `First check in ${minsToCheck} min`
+    : `${passed}/${done} checks passed`;
+}
+
+function workoutComplete() {
+  clearInterval(workoutTick); workoutActive = false; refiring = false;
+  stopHRSim();
+  sendM5Command('stop');
+  showToast('Workout complete. Well done.', 'success');
+  setTimeout(() => { showScreen('home'); updateHomeUI(); }, 1500);
+}
+
+
+
+// ── GARMIN BLE ──
+async function connectGarmin() {
+  if (!('bluetooth' in navigator)) { showToast('Web Bluetooth not supported', 'error'); return; }
+  try {
+    showToast('Scanning for Garmin...', '');
+    bleDevice = await navigator.bluetooth.requestDevice({
+      filters: [{ services: ['heart_rate'] }, { namePrefix: 'Forerunner' }, { namePrefix: 'Garmin' }],
+      optionalServices: ['heart_rate']
+    });
+    const server = await bleDevice.gatt.connect();
+    const service = await server.getPrimaryService('heart_rate');
+    const char = await service.getCharacteristic('heart_rate_measurement');
+    await char.startNotifications();
+    char.addEventListener('characteristicvaluechanged', (e) => { currentHR = e.target.value.getUint8(1); });
+    showToast('Garmin connected ✓', 'success');
+    document.getElementById('garmin-btn').textContent = '✓ Garmin connected';
+  } catch(e) { showToast('BLE failed — use simulate', 'error'); }
+}
+
+// ── HR SIM ──
+function toggleHRSim() {
+  if (hrSimInterval) { stopHRSim(); return; }
+  let base = state.hrThreshold + 10;
+  hrSimInterval = setInterval(() => {
+    base += (Math.random() - 0.45) * 8;
+    base = Math.max(60, Math.min(185, base));
+    currentHR = Math.round(base);
+  }, 2000);
+  showToast('HR simulation running', 'success');
+  document.getElementById('sim-btn').textContent = '■ Stop HR simulation';
+}
+
+
+function stopHRSim() {
+  if (hrSimInterval) { clearInterval(hrSimInterval); hrSimInterval = null; }
+  document.getElementById('sim-btn').textContent = 'Simulate HR feed';
+}
+
+// ── NFC REGISTRATION ──
+async function registerNFC() {
+  if (!('NDEFReader' in window)) {
+    showToast('NFC not available — need HTTPS + Chrome on Android', 'error');
+    return;
+  }
+  showToast('Hold phone over NFC tag...', '');
+  try {
+    const reader = new NDEFReader();
+    await reader.scan();
+    reader.onreading = async (e) => {
+      const tagId = e.serialNumber || 'unknown';
+      state.tagId = tagId;
+      saveState();
+      updateNFCRegisterUI();
+      showToast('Tag registered ✓ ' + tagId, 'success');
+      // Also register with M5
+      if (state.m5ip) {
+        try {
+          await fetch(`http://${state.m5ip}/registerTag`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tagId })
+          });
+        } catch(e) {}
       }
+    };
+  } catch(e) { showToast('NFC read failed: ' + e.message, 'error'); }
+}
+
+function clearNFC() { state.tagId = null; saveState(); updateNFCRegisterUI(); showToast('Tag cleared', ''); }
+
+function updateNFCRegisterUI() {
+  const label = document.getElementById('nfc-register-label');
+  const display = document.getElementById('tag-id-display');
+  const area = document.getElementById('nfc-register-area');
+  if (state.tagId) { label.textContent = 'Tag registered ✓'; display.textContent = state.tagId; area.classList.add('registered'); }
+  else { label.textContent = 'Tap to register tag'; display.textContent = ''; area.classList.remove('registered'); }
+}
+
+// ── CONFIG ──
+function selectMode(mode) {
+  state.mode = mode;
+  document.getElementById('mode-standard').classList.toggle('selected', mode === 'standard');
+  document.getElementById('mode-workout').classList.toggle('selected', mode === 'workout');
+  document.getElementById('workout-config').classList.toggle('show', mode === 'workout');
+}
+
+function loadConfigUI() {
+  document.getElementById('alarm-time-input').value = state.alarmTime;
+  document.querySelectorAll('.day-btn').forEach(btn =>
+    btn.classList.toggle('selected', state.days.includes(parseInt(btn.dataset.day))));
+  document.querySelectorAll('.dur-btn').forEach(btn =>
+    btn.classList.toggle('selected', parseInt(btn.dataset.mins) === state.workoutMins));
+  document.getElementById('m5-ip-input').value = state.m5ip;
+  selectMode(state.mode);
+  document.querySelectorAll('.hr-preset').forEach(p => {
+    const bpm = p.dataset.bpm;
+    p.classList.toggle('selected', bpm === 'custom'
+      ? state.hrPreset === 'Custom'
+      : parseInt(bpm) === state.hrThreshold && state.hrPreset !== 'Custom');
+  });
+  updateNFCRegisterUI();
+}
+
+document.querySelectorAll('.day-btn').forEach(btn =>
+  btn.addEventListener('click', () => btn.classList.toggle('selected')));
+document.querySelectorAll('.dur-btn').forEach(btn =>
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.dur-btn').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+  }));
+
+function selectPreset(el) {
+  document.querySelectorAll('.hr-preset').forEach(p => p.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('custom-hr-wrap').classList.toggle('show', el.dataset.bpm === 'custom');
+}
+
+function updateCustomPreview() {
+  document.getElementById('custom-preview').textContent =
+    document.getElementById('custom-hr-input').value || '—';
+}
+
+function saveAlarm() {
+  state.alarmTime = document.getElementById('alarm-time-input').value;
+  state.days = [...document.querySelectorAll('.day-btn.selected')].map(b => parseInt(b.dataset.day));
+  const newIp = document.getElementById('m5-ip-input').value.trim();
+  if (newIp) state.m5ip = newIp; // only overwrite if field has a value
+  state.enabled = state.days.length > 0;
+  const selDur = document.querySelector('.dur-btn.selected');
+  if (selDur) state.workoutMins = parseInt(selDur.dataset.mins);
+  const selPreset = document.querySelector('.hr-preset.selected');
+  if (selPreset) {
+    if (selPreset.dataset.bpm === 'custom') {
+      const custom = parseInt(document.getElementById('custom-hr-input').value);
+      if (custom >= 60 && custom <= 200) { state.hrThreshold = custom; state.hrPreset = 'Custom'; }
+      else { showToast('Enter a valid BPM (60–200)', 'error'); return; }
+    } else {
+      state.hrThreshold = parseInt(selPreset.dataset.bpm);
+      state.hrPreset = selPreset.querySelector('.hr-preset-name').textContent;
     }
   }
+  saveState();
+  showToast('Alarm saved ✓', 'success');
+  setTimeout(() => { showScreen('home'); updateHomeUI(); }, 700);
+}
 
-  if (screenOn && !alarmFiring && !snoozeActive && millis() - lastTouch > SCREEN_TIMEOUT) {
-    sleepScreen();
-  }
+// ── M5 COMMS ──
+async function sendM5Command(cmd, query = '') {
+  if (!state.m5ip) return;
+  try { await fetch(`http://${state.m5ip}/${cmd}`, { signal: AbortSignal.timeout(2000) }); } catch(e) {}
+}
 
-  static unsigned long lastDraw = 0;
-  if (screenOn && !alarmFiring && !snoozeActive && millis() - lastDraw > 30000) {
-    lastDraw = millis();
-    drawIdleScreen();
-  }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    WiFi.reconnect();
+async function testM5Connection() {
+  const ip = document.getElementById('m5-ip-input').value.trim();
+  const el = document.getElementById('m5-status');
+  if (!ip) { showToast('Enter an IP first', 'error'); return; }
+  el.innerHTML = `<span class="m5-dot" style="background:var(--accent)"></span> Testing...`;
+  try {
+    const res = await fetch(`http://${ip}/ping`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) { el.innerHTML = `<span class="m5-dot" style="background:var(--accent)"></span> Connected ✓`; showToast('M5 connected ✓', 'success'); }
+    else throw new Error();
+  } catch(e) {
+    el.innerHTML = `<span class="m5-dot" style="background:var(--accent2)"></span> Not reachable · hardware pending`;
   }
 }
+
+// ── TOAST ──
+function showToast(msg, type='') {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = `toast ${type} show`;
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── M5 PING ──
+async function pingM5() {
+  const dot = document.getElementById('m5-pill-dot');
+  const txt = document.getElementById('m5-pill-text');
+  if (!state.m5ip) {
+    dot.className = 'm5-pill-dot';
+    txt.textContent = 'M5 · no IP set';
+    return;
+  }
+  try {
+    const res = await fetch(`http://${state.m5ip}/ping`, { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      dot.className = 'm5-pill-dot online';
+      txt.textContent = 'M5 · online';
+    } else throw new Error();
+  } catch(e) {
+    dot.className = 'm5-pill-dot offline';
+    txt.textContent = 'M5 · offline';
+  }
+}
+
+// ── CHECK IF ALARM CURRENTLY FIRING ──
+async function checkFiringState() {
+  if (!state.m5ip) return;
+  try {
+    const res = await fetch(`http://${state.m5ip}/state`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.firing) {
+      // Only navigate if not already on alarm screen
+      const alarmScreen = document.getElementById('screen-alarm');
+      if (alarmScreen && !alarmScreen.classList.contains('active')) {
+        showScreen('alarm');
+      }
+    }
+  } catch(e) {}
+}
+
+// ── INIT ──
+updateClock(); updateHomeUI(); pingM5(); pullStateFromM5().then(() => checkFiringState());
+setInterval(updateClock, 10000);
+setInterval(pingM5, 30000);
+setInterval(checkFiringState, 5000);
+</script>
+</body>
+</html>
